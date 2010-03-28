@@ -8,7 +8,7 @@ use URI;
 use WWW::Mechanize;
 use HTTP::Cookies;
 
-our $VERSION = '1.00';
+our $VERSION = '1.01';
 
 my @attributes = qw(
     secure server prefix list userinfo
@@ -25,7 +25,7 @@ for my $attr (@attributes) {
     no strict 'refs';
     *{$attr} = sub {
         my $self = shift;
-        return defined $self->{$attr} ? $self->{$attr} : ''  if !@_;
+        return defined $self->{$attr} ? $self->{$attr} : '' if !@_;
         return $self->{$attr} = shift;
     };
 }
@@ -268,6 +268,34 @@ sub othersubs {
         $mech->content =~ m{<li><a href="([^"]+)">[^<]+</a>}g;
 }
 
+sub roster {
+    my ( $self, %options ) = @_;
+    my $mech = $self->robot;
+    $self->_load_uri( $self->_uri_for('roster') );
+
+    # try to detect authentication issues [private_roster]
+    if ( $mech->content !~ /<li>/ ) {
+
+        # authenticate through listinfo
+        $mech->get( $self->_uri_for('listinfo') );
+        my $form = $mech->form_with_fields('roster-pw');
+
+        # in case the roster is reserved to admins,
+        # we'll try the admin passwords first
+        my $password = $self->admin_password || $self->moderator_password;
+        $mech->set_fields( 'roster-email' => $self->email ) if !$password;
+        $mech->set_fields( 'roster-pw' => $password || $self->password );
+        $mech->click('SubscriberRoster');
+    }
+
+    # subscriber list may be empty, e.g. for privacy reasons
+    return
+
+        # TODO: distinguishes types of subscribers
+        map { s/ at /@/; $_ }    # [obscure_addresses]
+        $mech->content =~ m{<li><a href[^>]*>([^<]*)</a>}g;
+}
+
 1;
 
 __END__
@@ -419,7 +447,7 @@ web interface.
 =head1 ACTION METHODS
 
 C<WWW::Mailman> is used to interact with Mailman through its web
-inteface. Most of the useful methods are therefore related to
+inteface. Most of the useful methods in this module are therefore related to
 the web interface itself.
 
 =head2 Options
@@ -471,6 +499,20 @@ this method may return an empty list (this is a bug in Mailman's interface).
 Request the password to be emailed to the user.
 
 This method doesn't require authentication.
+
+=back
+
+=head2 Other methods
+
+=over 4
+
+=item roster( )
+
+Request the list of subscribers to the mailing-list.
+Authentication is not required, but maybe be used.
+
+Note that the list may be empty, depending on the level of authentication
+available and the privacy settings of the list.
 
 =back
 
@@ -527,6 +569,12 @@ You can find documentation for this module with the perldoc command.
 You can also look for information at:
 
 =over 4
+
+=item * One of the official repositories:
+
+L<http://github.com/book/WWW-Mailman>
+
+L<http://git.bruhat.net/cgi-bin/gitweb.cgi/WWW-Mailman.git>
 
 =item * RT: CPAN's request tracker
 
