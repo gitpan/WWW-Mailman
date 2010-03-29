@@ -35,16 +35,22 @@ else {
     }
 }
 
+# a number of cases where we can't do live tests
 plan skip_all => 'No credentials available for live tests'
     if !keys %option;
 
 plan skip_all => 'Need at least a uri parameter for live tests'
     if !exists $option{uri};
 
+plan skip_all => 'Need web access for live tests'
+    if !WWW::Mechanize->new( autocheck => 0 )->get( $option{uri} )
+        ->is_success();
+
+# we can do live tests!
 plan tests => my $tests;
 
 # some useful variables
-my ( $mm, $url, $got, $expected, @subs );
+my ( $mm, $url, $got, $expected, $conceal, @subs );
 
 # this is pure lazyness
 sub mm {
@@ -92,6 +98,7 @@ SKIP: {
     ok( eval { $got = $mm->options( { conceal => $old } ) },
         "options( { conceal => $old } ) passes" );
     is( $got->{conceal}, $old, "Changed back the value of 'conceal' option" );
+    $conceal = $got->{conceal};
     BEGIN { $tests += $count = 5 }
 }
 
@@ -127,6 +134,7 @@ SKIP: {
 # check roster (with some power user access, just in case access is restricted)
 SKIP: {
     $mm = mm( my $count, qw( email password moderator_password ) );
+    skip "Can't test roster() if our email is concealed", $count if $conceal;
     my @emails;
     ok( eval { @emails = $mm->roster(); 1 }, 'roster()' );
     ok( scalar( grep { $_ eq $option{email} } @emails ),
@@ -135,11 +143,39 @@ SKIP: {
 }
 
 SKIP: {
-    $mm = mm( my $count, qw( email password admin_password ) );
+    $mm = mm( my $count, qw( admin_password ) );
     my @emails;
     ok( eval { @emails = $mm->roster(); 1 }, 'roster()' );
-    ok( scalar( grep { $_ eq $option{email} } @emails ),
-        'roster has at least our email' );
+    ok( scalar( grep {/\@/} @emails ), 'roster has at least one email' );
     BEGIN { $tests += $count = 2 }
+}
+
+# check some boolean admin options
+SKIP: {
+    $mm = mm( my $count, qw( admin_password ) );
+    my %admin;
+    for my $section ( keys %admin ) {
+        my $method = "admin_$section";
+        ok( eval { $got = $mm->$method() }, "admin_$section()" );
+        my $new = ( my $old = $got->{ $admin{$section} } ) ? '0' : '1';
+        ok( eval { $got = $mm->$method( { $admin{$section} => $new } ) },
+            "$method( { $admin{$section} => $new } ) passes"
+        );
+        is( $got->{ $admin{$section} },
+            $new, "Changed the value of '$admin{$section}' option" );
+        ok( eval { $got = $mm->$method( { $admin{$section} => $old } ) },
+            "$method( { $admin{$section} => $old } ) passes"
+        );
+        is( $got->{ $admin{$section} },
+            $old, "Changed back the value of '$admin{$section}' option" );
+    }
+
+    BEGIN {
+        %admin = (
+            general => 'send_reminders',
+            bounce  => 'bounce_processing',
+        );
+        $tests += $count = 5 * keys %admin;
+    }
 }
 
