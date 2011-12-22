@@ -8,12 +8,16 @@ use URI;
 use WWW::Mechanize;
 use HTTP::Cookies;
 
-our $VERSION = '1.04';
+our $VERSION = '1.05';
 
 my @attributes = qw(
-    secure server prefix list
+    secure server prefix program list
     email password moderator_password admin_password
 );
+
+my %default = ( program => 'mailman' );
+
+my $action_re = qr/^(?:admin(?:db)?|edithtml|listinfo|options|private)$/;
 
 #
 # ACCESSORS / MUTATORS
@@ -24,7 +28,8 @@ for my $attr (@attributes) {
     no strict 'refs';
     *{$attr} = sub {
         my $self = shift;
-        return defined $self->{$attr} ? $self->{$attr} : '' if !@_;
+        return defined $self->{$attr} ? $self->{$attr} : $default{$attr} || ''
+            if !@_;
         return $self->{$attr} = shift;
     };
 }
@@ -35,16 +40,32 @@ sub uri {
     if ($uri) {
         $uri = URI->new($uri);
 
-        # @segments = @prefix, 'mailman', $action, $list, @suffix
+        # @segments = @prefix, $program, $action, $list, @suffix
+        my $program = $self->program;
         my ( undef, @segments ) = $uri->path_segments;
         my @prefix;
-        push @prefix, shift @segments
-            while @segments && $segments[0] ne 'mailman';
-        my $segment = shift @segments || '';
-        croak "Invalid URL $uri: no 'mailman' segment"
-            if $segment ne 'mailman';
-        croak "Invalid URL $uri: no action"
-            if !shift @segments;
+
+        # the program name is found in the url
+        if( grep $_ eq $program, @segments ) {
+            push @prefix, shift @segments
+                while @segments && $segments[0] ne $program;
+            shift @segments;    # drop the program name
+            croak "Invalid URL $uri: no action"
+                if !shift @segments;
+        }
+
+        # try to autodetect the program name
+        elsif( grep $_ =~ $action_re, @segments ) {
+            push @prefix, shift @segments
+                while @segments && $segments[0] !~ $action_re;
+            $self->program( pop @prefix );    # get the program name
+            shift @segments;    # drop the action name
+        }
+
+        # declare FAIL
+        else {
+            croak "Invalid URL $uri: no program segment found ($program)";
+        }
 
         # just keep the bits we need
         $self->server( $uri->host );
@@ -99,7 +120,7 @@ sub new {
     # create the object
     my $self = bless {}, $class;
 
-    # get attributes
+    # get the rest of attributes
     $self->$_( delete $args{$_} )
         for grep { exists $args{$_} } @attributes;
 
@@ -109,6 +130,7 @@ sub new {
             agent => "WWW::Mailman/$VERSION",
             stack_depth => 2,    # make it a Bear of Very Little Brain
             quiet       => 1,
+            autocheck   => 0,    # Fancy my making a mistake like that
         );
         $mech_options{cookie_jar} = HTTP::Cookies->new(
             file => delete $args{cookie_file},
@@ -136,7 +158,7 @@ sub _uri_for {
         if $self->userinfo;
     $uri->host( $self->server );
     $uri->path( join '/', $self->prefix || (),
-        'mailman', $action, $self->list, @options );
+        $self->program, $action, $self->list, @options );
     return $uri;
 }
 
@@ -180,6 +202,11 @@ sub _load_uri {
         $mech->request( $form->click );
         croak "Couldn't login on $uri" if $self->_login_form;
     }
+
+    # get the version if we don't have it yet
+    $self->{version} = $1
+        if !exists $self->{version}
+            && $mech->content =~ /<br>version (\d+\.\d+\.\d+\w*)</;
 
     # we're on!
 }
@@ -334,6 +361,7 @@ sub admin {
 
     # change of options
     if ($options) {
+        $mech->current_form->accept_charset('iso-8859-1');
         $mech->set_fields(%$options);
         $mech->click();
         $mech->form_number(1);
@@ -354,6 +382,15 @@ for my $section (
     *{"admin_$section"} = sub { shift->admin( "$section", @_ ) }
 }
 
+sub version {
+    my ($self) = @_;
+    return $self->{version} if exists $self->{version};
+
+    # get it as part of a page download
+    $self->_load_uri( $self->_uri_for('listinfo') );
+    return $self->{version};
+}
+
 1;
 
 __END__
@@ -369,7 +406,7 @@ WWW::Mailman - Interact with Mailman's web interface from a Perl program
     my $mm = WWW::Mailman->new(
 
         # the smallest bit of information we need
-        url      => 'http://lists.example.com/mailman/listinfo/example',
+        uri      => 'http://lists.example.com/mailman/listinfo/example',
 
         # TIMTOWTDI
         server   => 'lists.example.com',
@@ -465,6 +502,14 @@ Note that the URI object returned by C<uri()> will show this information.
 Get or set the I<prefix> part of the web interface.
 (For the rare case when Mailman is not run from the top-level C</mailman/>
 URL.)
+
+=item program
+
+Get or set the I<program> name. The default is C<mailman>.
+Some servers define it to something else (e.g. SourceForge uses C<lists>.
+
+WWW::Mailman should usually be able to guess it. If not, you'll need
+to pass the C<program> parameter to the constructor, as a hint.
 
 =item list
 
@@ -638,6 +683,13 @@ Authentication is not required, but maybe be used.
 
 Note that the list may be empty, depending on the level of authentication
 available and the privacy settings of the list.
+
+=item version( )
+
+Returm the Mailman version as printed at the bottom of all pages.
+
+Whenever WWW::Mailman downloads a Mailman web page, it tries to obtain
+this version information.
 
 =back
 
