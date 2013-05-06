@@ -8,7 +8,7 @@ use URI;
 use WWW::Mechanize;
 use HTTP::Cookies;
 
-our $VERSION = '1.05';
+our $VERSION = '1.06';
 
 my @attributes = qw(
     secure server prefix program list
@@ -184,10 +184,7 @@ sub _login_form {
                 || $self->moderator_password );
     }
 
-    # no authentication required
-    else {
-        $form = undef;
-    }
+    # otherwise, no authentication required
 
     return $form;
 }
@@ -323,7 +320,7 @@ sub othersubs {
 }
 
 sub roster {
-    my ( $self, %options ) = @_;
+    my ($self) = @_;
     my $mech = $self->robot;
     $self->_load_uri( $self->_uri_for('roster') );
 
